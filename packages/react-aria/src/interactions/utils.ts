@@ -39,14 +39,19 @@ export function useSyntheticBlurEvent<Target extends Element = Element>(
 ): (e: ReactFocusEvent<Target>) => void {
   let stateRef = useRef({
     isFocused: false,
-    observer: null as MutationObserver | null
+    observer: null as MutationObserver | null,
+    target: null as Target | null,
+    onBlur: null as EventListener | null
   });
-
-  // Clean up MutationObserver on unmount. See below.
 
   useLayoutEffect(() => {
     const state = stateRef.current;
     return () => {
+      if (state.target && state.onBlur) {
+        state.target.removeEventListener('focusout', state.onBlur);
+        state.target = null;
+        state.onBlur = null;
+      }
       if (state.observer) {
         state.observer.disconnect();
         state.observer = null;
@@ -57,41 +62,49 @@ export function useSyntheticBlurEvent<Target extends Element = Element>(
   // This function is called during a React onFocus event.
   return useCallback(
     (e: ReactFocusEvent<Target>) => {
-      // React does not fire onBlur when an element is disabled. https://github.com/facebook/react/issues/9142
-      // Most browsers fire a native focusout event in this case, except for Firefox. In that case, we use a
-      // MutationObserver to watch for the disabled attribute, and dispatch these events ourselves.
-      // For browsers that do, focusout fires before the MutationObserver, so onBlur should not fire twice.
-      let eventTarget = getEventTarget(e);
+      // React does not fire onBlur when an element stops being focusable during a commit.
+      // https://github.com/facebook/react/issues/9142
+      // Chrome fires focusout synchronously; Firefox needs an observer for disabled form controls.
+      let state = stateRef.current;
+      if (state.target && state.onBlur) {
+        state.target.removeEventListener('focusout', state.onBlur);
+      }
+      state.observer?.disconnect();
+      state.observer = null;
+      let target = getEventTarget(e);
+      state.isFocused = true;
+
+      let onBlurHandler: EventListener = e => {
+        state.isFocused = false;
+        state.target = null;
+        state.onBlur = null;
+
+        if (!isFocusable(target, {skipVisibilityCheck: true})) {
+          // For backward compatibility, dispatch a (fake) React synthetic event.
+          let event = createSyntheticEvent<ReactFocusEvent<Target>>(e);
+          onBlur?.(event);
+        }
+
+        // We no longer need the MutationObserver once the target is blurred.
+        if (state.observer) {
+          state.observer.disconnect();
+          state.observer = null;
+        }
+      };
+
+      state.target = e.currentTarget;
+      state.onBlur = onBlurHandler;
+      e.currentTarget.addEventListener('focusout', onBlurHandler, {once: true});
+
       if (
-        eventTarget instanceof HTMLButtonElement ||
-        eventTarget instanceof HTMLInputElement ||
-        eventTarget instanceof HTMLTextAreaElement ||
-        eventTarget instanceof HTMLSelectElement
+        target instanceof HTMLButtonElement ||
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
       ) {
-        stateRef.current.isFocused = true;
-
-        let target = eventTarget;
-        let onBlurHandler: EventListenerOrEventListenerObject | null = e => {
-          stateRef.current.isFocused = false;
-
-          if (target.disabled) {
-            // For backward compatibility, dispatch a (fake) React synthetic event.
-            let event = createSyntheticEvent<ReactFocusEvent<Target>>(e);
-            onBlur?.(event);
-          }
-
-          // We no longer need the MutationObserver once the target is blurred.
-          if (stateRef.current.observer) {
-            stateRef.current.observer.disconnect();
-            stateRef.current.observer = null;
-          }
-        };
-
-        target.addEventListener('focusout', onBlurHandler, {once: true});
-
-        stateRef.current.observer = new MutationObserver(() => {
-          if (stateRef.current.isFocused && target.disabled) {
-            stateRef.current.observer?.disconnect();
+        state.observer = new MutationObserver(() => {
+          if (state.isFocused && target.disabled) {
+            state.observer?.disconnect();
             let relatedTargetEl = target === getActiveElement() ? null : getActiveElement();
             target.dispatchEvent(new FocusEvent('blur', {relatedTarget: relatedTargetEl}));
             target.dispatchEvent(
@@ -100,7 +113,7 @@ export function useSyntheticBlurEvent<Target extends Element = Element>(
           }
         });
 
-        stateRef.current.observer.observe(target, {
+        state.observer.observe(target, {
           attributes: true,
           attributeFilter: ['disabled']
         });

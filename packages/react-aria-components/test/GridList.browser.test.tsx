@@ -17,6 +17,7 @@ import React, {useState} from 'react';
 import {render} from 'vitest-browser-react';
 import {Size} from 'react-stately/useVirtualizerState';
 import {User} from '@react-aria/test-utils';
+import {userEvent} from 'vitest/browser';
 import {Virtualizer} from '../src/Virtualizer';
 
 function Grid() {
@@ -119,4 +120,48 @@ it('virtualizer renders items after toggling display:none', async () => {
   await button.click();
   await button.click();
   await expect(tester.getRows().length).toBeGreaterThan(0);
+});
+
+function DisableWhileBusy() {
+  let [isBusy, setBusy] = useState(false);
+  let items = ['one', 'two', 'three'];
+  return (
+    <GridList
+      aria-label="Test"
+      selectionMode="single"
+      disabledBehavior="all"
+      disabledKeys={isBusy ? items : []}
+      onSelectionChange={() => {
+        setBusy(true);
+        Promise.resolve().then(() => setBusy(false));
+      }}>
+      {items.map(id => (
+        <GridListItem key={id} id={id}>
+          {id}
+        </GridListItem>
+      ))}
+    </GridList>
+  );
+}
+
+it('clears the focus ring of a row that is disabled while focused', async () => {
+  let testUtilUser = new User();
+  let {container} = await render(<DisableWhileBusy />);
+  let tester = testUtilUser.createTester('GridList', {
+    root: container.querySelector('[role=grid]') as HTMLElement,
+    interactionType: 'mouse'
+  });
+  let rows = tester.getRows();
+
+  await userEvent.click(rows[0]);
+  await expect.poll(() => rows[1].getAttribute('aria-disabled')).not.toBe('true');
+  await userEvent.click(rows[1]);
+  await expect.poll(() => rows[1].getAttribute('aria-disabled')).not.toBe('true');
+  await userEvent.keyboard('{Shift}');
+
+  await expect.poll(() => rows[1].getAttribute('data-focus-visible')).toBe('true');
+  expect(document.activeElement).toBe(rows[1]);
+  expect(rows[1].getAttribute('data-focused')).toBe('true');
+  expect(rows[0].getAttribute('data-focused')).toBeNull();
+  expect(rows[0].getAttribute('data-focus-visible')).toBeNull();
 });

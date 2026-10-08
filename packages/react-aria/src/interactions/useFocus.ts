@@ -16,7 +16,7 @@
 // See https://github.com/facebook/react/tree/cc7c1aece46a6b69b41958d731e0fd27c94bfc6c/packages/react-interactions
 
 import {DOMAttributes, FocusableElement, FocusEvents} from '@react-types/shared';
-import {FocusEvent, useCallback} from 'react';
+import {FocusEvent, useCallback, useRef} from 'react';
 import {getActiveElement, getEventTarget} from '../utils/shadowdom/DOMFunctions';
 import {getOwnerDocument} from '../utils/domHelpers';
 import {useSyntheticBlurEvent} from './utils';
@@ -40,9 +40,12 @@ export function useFocus<Target extends FocusableElement = FocusableElement>(
 ): FocusResult<Target> {
   let {isDisabled, onFocus: onFocusProp, onBlur: onBlurProp, onFocusChange} = props;
 
+  let blurEvents = useRef(new WeakSet<Event>());
+
   const onBlur: FocusProps<Target>['onBlur'] = useCallback(
     (e: FocusEvent<Target>) => {
-      if (getEventTarget(e) === e.currentTarget) {
+      if (getEventTarget(e) === e.currentTarget && !blurEvents.current.has(e.nativeEvent)) {
+        blurEvents.current.add(e.nativeEvent);
         if (onBlurProp) {
           onBlurProp(e);
         }
